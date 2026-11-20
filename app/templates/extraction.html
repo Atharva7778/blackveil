@@ -1,0 +1,573 @@
+{% extends "base.html" %}
+{% block title %}EXTRACTION PROTOCOL{% endblock %}
+{% block content %}
+
+<style>
+    #game-container {
+        position: relative;
+        width: 900px;
+        height: 600px;
+        border: 1px solid #00ff41;
+        margin: 0 auto;
+        background: #050505;
+        overflow: hidden;
+        cursor: none; 
+    }
+    canvas { display: block; }
+    
+    #hud-overlay {
+        position: absolute;
+        top: 10px; left: 10px; right: 10px;
+        display: flex;
+        justify-content: space-between;
+        color: #00ff41;
+        pointer-events: none;
+        font-size: 1rem;
+        background: rgba(0,0,0,0.85);
+        padding: 12px 18px;
+        border: 1px solid #333;
+        font-family: 'Courier New', monospace;
+        letter-spacing: 1px;
+    }
+    
+    #objective-panel {
+        position: absolute;
+        top: 80px; right: 20px;
+        background: rgba(0, 0, 0, 0.85);
+        border-left: 3px solid #00ff41;
+        padding: 12px 18px;
+        color: #00ff41;
+        font-size: 0.85rem;
+        max-width: 220px;
+        font-family: 'Courier New', monospace;
+    }
+    #objective-panel h4 { color: #ffaa00; margin-bottom: 8px; letter-spacing: 2px; }
+    
+    #win-screen {
+        position: absolute;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        background: rgba(0, 0, 0, 0.95);
+        display: none;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+        cursor: default;
+    }
+    
+    .xp-counter { font-size: 4rem; color: #ffaa00; font-weight: bold; letter-spacing: 4px; }
+    .result-title { font-size: 2.5rem; color: #00ff41; letter-spacing: 6px; margin-bottom: 1rem; font-weight: bold; }
+</style>
+
+<div class="panel" style="max-width: 950px;">
+    <h2 style="color: #ff3333;">EXTRACTION PROTOCOL // 3-PHASE SURVIVAL</h2>
+    <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">
+        Phase 1: Reach safe house · Phase 2: Kill 8 enemies · Phase 3: Destroy 3 turrets
+    </p>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="900" height="600"></canvas>
+        <div id="hud-overlay">
+            <span>HP: <span id="hpText" style="color:#ff3333">100</span></span>
+            <span>KILLS: <span id="killText">0</span>/8</span>
+            <span>PHASE: <span id="phaseText" style="color:#ffaa00">1</span></span>
+        </div>
+        <div id="objective-panel">
+            <h4>OBJECTIVE</h4>
+            <p id="objectiveText">REACH THE GREEN SAFE HOUSE (TOP RIGHT)</p>
+        </div>
+        <div id="win-screen">
+            <div class="result-title" id="resultTitle">MISSION COMPLETE</div>
+            <div class="xp-counter" id="xpDisplay">+0 XP</div>
+            <button onclick="window.location.href='/dashboard'" style="margin-top: 2rem; padding: 1rem 3rem; font-size: 1.2rem; background: #00ff41; color: #000; border: none; font-weight: bold; cursor: pointer; letter-spacing: 2px;">RETURN TO BASE</button>
+        </div>
+    </div>
+
+    <p style="margin-top: 1.5rem; font-size: 0.85rem; text-align: center;">
+        <a href="{{ url_for('main.dashboard') }}">[ ABORT MISSION ]</a>
+    </p>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('game-container');
+    const hpText = document.getElementById('hpText');
+    const killText = document.getElementById('killText');
+    const phaseText = document.getElementById('phaseText');
+    const objectiveText = document.getElementById('objectiveText');
+    const winScreen = document.getElementById('win-screen');
+    const resultTitle = document.getElementById('resultTitle');
+    const xpDisplay = document.getElementById('xpDisplay');
+
+    const state = {
+        phase: 1,
+        hp: 100,
+        kills: 0,
+        player: { x: 100, y: 500, r: 14, speed: 4, angle: 0, recoil: 0 },
+        mouse: { x: 450, y: 300, down: false },
+        lastShot: 0,
+        bullets: [],
+        enemies: [],
+        particles: [],
+        obstacles: [],
+        turrets: [],
+        chopper: { x: 700, y: 100 },
+        keys: {},
+        gameOver: false,
+        enemySpawnCounter: 0
+    };
+
+    window.addEventListener('keydown', (e) => {
+        state.keys[e.key.toLowerCase()] = true;
+        if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(e.key.toLowerCase())) {
+            e.preventDefault();
+        }
+    });
+    window.addEventListener('keyup', (e) => state.keys[e.key.toLowerCase()] = false);
+
+    container.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        state.mouse.x = e.clientX - rect.left;
+        state.mouse.y = e.clientY - rect.top;
+    });
+    container.addEventListener('mousedown', () => state.mouse.down = true);
+    container.addEventListener('mouseup', () => state.mouse.down = false);
+
+    function burst(x, y, color, count) {
+        for (let i = 0; i < count; i++) {
+            state.particles.push({
+                x: x, y: y,
+                vx: (Math.random() - 0.5) * 10,
+                vy: (Math.random() - 0.5) * 10,
+                life: 30,
+                color: color
+            });
+        }
+    }
+
+    function movePlayer() {
+        if (state.keys['w']) state.player.y -= state.player.speed;
+        if (state.keys['s']) state.player.y += state.player.speed;
+        if (state.keys['a']) state.player.x -= state.player.speed;
+        if (state.keys['d']) state.player.x += state.player.speed;
+        state.player.x = Math.max(20, Math.min(880, state.player.x));
+        state.player.y = Math.max(20, Math.min(580, state.player.y));
+        
+        state.player.angle = Math.atan2(state.mouse.y - state.player.y, state.mouse.x - state.player.x);
+        
+        if (state.player.recoil > 0) state.player.recoil -= 0.5;
+    }
+
+    function shoot() {
+        if (Date.now() - state.lastShot < 80) return;
+        state.lastShot = Date.now();
+        
+        state.player.recoil = 6;
+
+        const dx = state.mouse.x - state.player.x;
+        const dy = state.mouse.y - state.player.y;
+        const len = Math.hypot(dx, dy) || 1;
+        
+        state.bullets.push({
+            x: state.player.x + Math.cos(state.player.angle) * 30, 
+            y: state.player.y + Math.sin(state.player.angle) * 30,
+            vx: dx / len * 22, vy: dy / len * 22,
+            life: 60, enemy: false
+        });
+    }
+
+    // ==================== PHASE 1: CHASE ====================
+    function phase1() {
+        movePlayer();
+
+        if (Math.random() < 0.025) {
+            state.obstacles.push({
+                x: Math.random() * 900,
+                y: -30,
+                r: 15 + Math.random() * 15,
+                vy: 2 + Math.random() * 2
+            });
+        }
+
+        state.obstacles.forEach(o => {
+            o.y += o.vy;
+            const d = Math.hypot(o.x - state.player.x, o.y - state.player.y);
+            if (d < o.r + state.player.r) {
+                o.y = 9999;
+                state.hp -= 10;
+                hpText.innerText = Math.max(0, state.hp);
+                burst(state.player.x, state.player.y, '#ff3333', 10);
+            }
+        });
+        state.obstacles = state.obstacles.filter(o => o.y < 650);
+
+        if (state.player.x > 800 && state.player.y < 150) {
+            state.phase = 2;
+            state.player.x = 450;
+            state.player.y = 500;
+            phaseText.innerText = "2";
+            objectiveText.innerText = "ELIMINATE 8 ENEMIES (WASD + CLICK)";
+            state.enemySpawnCounter = 0;
+        }
+
+        if (state.hp <= 0) endGame(false);
+    }
+
+    // ==================== PHASE 2: SHOOTOUT ====================
+    function phase2() {
+        movePlayer();
+        if (state.mouse.down) shoot();
+
+        if (state.enemies.filter(e => e.hp > 0).length < 3 && state.kills + state.enemies.filter(e => e.hp > 0).length < 8) {
+            state.enemySpawnCounter++;
+            if (state.enemySpawnCounter > 45) {
+                state.enemySpawnCounter = 0;
+                const edge = Math.floor(Math.random() * 4);
+                let x, y;
+                if (edge === 0) { x = Math.random() * 900; y = -20; }
+                else if (edge === 1) { x = 920; y = Math.random() * 600; }
+                else if (edge === 2) { x = Math.random() * 900; y = 620; }
+                else { x = -20; y = Math.random() * 600; }
+                state.enemies.push({ x: x, y: y, r: 14, hp: 2, maxHp: 2, lastShot: 0, angle: 0 });
+            }
+        }
+
+        state.bullets.forEach(b => { b.x += b.vx; b.y += b.vy; b.life--; });
+
+        state.enemies.forEach(e => {
+            if (e.hp <= 0) return;
+            const dx = state.player.x - e.x;
+            const dy = state.player.y - e.y;
+            const len = Math.hypot(dx, dy) || 1;
+            e.angle = Math.atan2(dy, dx);
+            
+            if (len > 100) {
+                e.x += dx / len * 1.3;
+                e.y += dy / len * 1.3;
+            }
+
+            if (Date.now() - e.lastShot > 1800 && len < 400) {
+                e.lastShot = Date.now();
+                state.bullets.push({
+                    x: e.x + Math.cos(e.angle) * 15, 
+                    y: e.y + Math.sin(e.angle) * 15,
+                    vx: dx / len * 6, vy: dy / len * 6,
+                    life: 100, enemy: true
+                });
+            }
+
+            if (len < e.r + state.player.r) {
+                state.hp -= 8;
+                hpText.innerText = Math.max(0, state.hp);
+                e.hp = 0;
+                burst(e.x, e.y, '#ff3333', 12);
+            }
+        });
+
+        state.bullets.forEach(b => {
+            if (b.enemy) {
+                if (Math.hypot(b.x - state.player.x, b.y - state.player.y) < state.player.r) {
+                    b.life = 0;
+                    state.hp -= 5;
+                    hpText.innerText = Math.max(0, state.hp);
+                }
+            } else {
+                state.enemies.forEach(e => {
+                    if (e.hp <= 0) return;
+                    if (Math.hypot(b.x - e.x, b.y - e.y) < e.r) {
+                        b.life = 0;
+                        e.hp--;
+                        if (e.hp <= 0) {
+                            state.kills++;
+                            killText.innerText = state.kills;
+                            burst(e.x, e.y, '#ffaa00', 15);
+                        }
+                    }
+                });
+            }
+        });
+
+        state.bullets = state.bullets.filter(b => b.life > 0);
+        state.enemies = state.enemies.filter(e => e.hp > 0 || e.x > -100);
+
+        if (state.kills >= 8) {
+            state.phase = 3;
+            phaseText.innerText = "3";
+            objectiveText.innerText = "DESTROY 3 TURRETS ON THE CHOPPER";
+            spawnTurrets();
+        }
+
+        if (state.hp <= 0) endGame(false);
+    }
+
+    function spawnTurrets() {
+        state.turrets = [
+            { x: 600, y: 100, r: 18, hp: 5, lastShot: 0, destroyed: false },
+            { x: 700, y: 100, r: 18, hp: 5, lastShot: 0, destroyed: false },
+            { x: 800, y: 100, r: 18, hp: 5, lastShot: 0, destroyed: false }
+        ];
+    }
+
+    // ==================== PHASE 3: BOSS ====================
+    function phase3() {
+        movePlayer();
+        if (state.mouse.down) shoot();
+
+        state.bullets.forEach(b => { b.x += b.vx; b.y += b.vy; b.life--; });
+
+        state.chopper.x = 700 + Math.sin(Date.now() / 1000) * 100;
+
+        state.turrets.forEach(t => {
+            if (t.destroyed) return;
+            if (Date.now() - t.lastShot > 1200) {
+                t.lastShot = Date.now();
+                const dx = state.player.x - t.x;
+                const dy = state.player.y - t.y;
+                const len = Math.hypot(dx, dy) || 1;
+                state.bullets.push({
+                    x: t.x, y: t.y,
+                    vx: dx / len * 5, vy: dy / len * 5,
+                    life: 150, enemy: true
+                });
+            }
+        });
+
+        state.bullets.forEach(b => {
+            if (b.enemy) {
+                if (Math.hypot(b.x - state.player.x, b.y - state.player.y) < state.player.r) {
+                    b.life = 0;
+                    state.hp -= 6;
+                    hpText.innerText = Math.max(0, state.hp);
+                }
+            } else {
+                state.turrets.forEach(t => {
+                    if (t.destroyed) return;
+                    if (Math.hypot(b.x - t.x, b.y - t.y) < t.r + 10) {
+                        b.life = 0;
+                        t.hp--;
+                        if (t.hp <= 0) {
+                            t.destroyed = true;
+                            burst(t.x, t.y, '#ffaa00', 20);
+                        }
+                    }
+                });
+            }
+        });
+
+        state.bullets = state.bullets.filter(b => b.life > 0);
+
+        if (state.turrets.every(t => t.destroyed)) {
+            endGame(true);
+        }
+
+        if (state.hp <= 0) endGame(false);
+    }
+
+    // ==================== END ====================
+    function endGame(success) {
+        if (state.gameOver) return;
+        state.gameOver = true;
+        winScreen.style.display = 'flex';
+        
+        if (success) {
+            resultTitle.innerText = "MISSION COMPLETE";
+            resultTitle.style.color = "#00ff41";
+            xpDisplay.style.color = "#ffaa00";
+            
+            // --- SEND XP TO PYTHON BACKEND ---
+            fetch('/api/award-xp', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ amount: 300 })
+            });
+
+            let xp = 0;
+            const interval = setInterval(() => {
+                xp += 10;
+                xpDisplay.innerText = "+" + xp + " XP";
+                if (xp >= 300) clearInterval(interval);
+            }, 50);
+        } else {
+            resultTitle.innerText = "MISSION FAILED";
+            resultTitle.style.color = "#ff3333";
+            xpDisplay.innerText = "AGENT DOWN";
+            xpDisplay.style.color = "#ff3333";
+        }
+    }
+
+    // ==================== DRAW AGENT ====================
+    function drawAgent(x, y, angle, recoil) {
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(angle);
+
+        // Draw Gun Barrel (Pushed back by recoil)
+        ctx.fillStyle = '#888';
+        ctx.fillRect(10 - recoil, -4, 25, 8);
+        ctx.fillStyle = '#333';
+        ctx.fillRect(30 - recoil, -5, 10, 10);
+
+        // Draw Body
+        ctx.fillStyle = '#00ff41'; 
+        ctx.beginPath();
+        ctx.arc(0, 0, 14, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Draw Head / Helmet
+        ctx.fillStyle = '#66ff99';
+        ctx.beginPath();
+        ctx.arc(0, 0, 8, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Draw Visor (looking forward)
+        ctx.fillStyle = '#000';
+        ctx.fillRect(4, -3, 5, 6);
+
+        ctx.restore();
+    }
+
+    // ==================== RENDER ====================
+    function render() {
+        ctx.fillStyle = '#050505';
+        ctx.fillRect(0, 0, 900, 600);
+
+        ctx.strokeStyle = 'rgba(0, 255, 65, 0.06)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 900; i += 40) {
+            ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 600); ctx.stroke();
+        }
+        for (let i = 0; i < 600; i += 40) {
+            ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(900, i); ctx.stroke();
+        }
+
+        if (state.phase === 1) {
+            ctx.fillStyle = '#00ff41';
+            ctx.fillRect(820, 20, 60, 60);
+            ctx.fillStyle = '#000';
+            ctx.font = 'bold 12px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('SAFE', 850, 45);
+            ctx.fillText('HOUSE', 850, 60);
+        }
+
+        state.obstacles.forEach(o => {
+            ctx.beginPath();
+            ctx.arc(o.x, o.y, o.r, 0, Math.PI * 2);
+            ctx.fillStyle = '#ff3333';
+            ctx.fill();
+        });
+
+        if (state.phase === 3) {
+            ctx.fillStyle = '#333';
+            ctx.beginPath();
+            ctx.ellipse(state.chopper.x, state.chopper.y, 60, 25, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = '#ff3333';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        state.turrets.forEach(t => {
+            if (t.destroyed) return;
+            ctx.fillStyle = '#ff3333';
+            ctx.fillRect(t.x - 10, t.y - 10, 20, 20);
+            ctx.fillStyle = '#333';
+            ctx.fillRect(t.x - 20, t.y - 32, 40, 5);
+            ctx.fillStyle = '#ff3333';
+            ctx.fillRect(t.x - 20, t.y - 32, 40 * (t.hp / 5), 5);
+        });
+
+        state.enemies.forEach(e => {
+            if (e.hp <= 0) return;
+            ctx.save();
+            ctx.translate(e.x, e.y);
+            ctx.rotate(e.angle || 0);
+            ctx.fillStyle = '#555';
+            ctx.fillRect(8, -2, 12, 4);
+            ctx.beginPath();
+            ctx.arc(0, 0, e.r, 0, Math.PI * 2);
+            ctx.fillStyle = '#ff3333';
+            ctx.fill();
+            ctx.fillStyle = '#000';
+            ctx.fillRect(3, -2, 3, 4);
+            ctx.restore();
+            ctx.fillStyle = '#333';
+            ctx.fillRect(e.x - 15, e.y - 22, 30, 3);
+            ctx.fillStyle = '#ff6666';
+            ctx.fillRect(e.x - 15, e.y - 22, 30 * (e.hp / e.maxHp), 3);
+        });
+
+        state.bullets.forEach(b => {
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, 3, 0, Math.PI * 2);
+            ctx.fillStyle = b.enemy ? '#ff3333' : '#00ff41';
+            ctx.fill();
+        });
+
+        state.particles.forEach(p => {
+            ctx.globalAlpha = p.life / 30;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+            ctx.fillStyle = p.color;
+            ctx.fill();
+            ctx.globalAlpha = 1;
+            p.x += p.vx;
+            p.y += p.vy;
+            p.life--;
+            p.vx *= 0.95;
+            p.vy *= 0.95;
+        });
+        state.particles = state.particles.filter(p => p.life > 0);
+
+        // --- LASER SIGHT ---
+        ctx.strokeStyle = 'rgba(255, 50, 50, 0.6)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(state.player.x, state.player.y);
+        ctx.lineTo(state.mouse.x, state.mouse.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // --- DRAW PLAYER ---
+        drawAgent(state.player.x, state.player.y, state.player.angle, state.player.recoil);
+
+        // --- CUSTOM CROSSHAIR ---
+        if (state.mouse.x > 0 && state.mouse.y > 0) {
+            ctx.strokeStyle = '#ff3333';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(state.mouse.x, state.mouse.y, 12, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(state.mouse.x - 20, state.mouse.y);
+            ctx.lineTo(state.mouse.x - 15, state.mouse.y);
+            ctx.moveTo(state.mouse.x + 15, state.mouse.y);
+            ctx.lineTo(state.mouse.x + 20, state.mouse.y);
+            ctx.moveTo(state.mouse.x, state.mouse.y - 20);
+            ctx.lineTo(state.mouse.x, state.mouse.y - 15);
+            ctx.moveTo(state.mouse.x, state.mouse.y + 15);
+            ctx.lineTo(state.mouse.x, state.mouse.y + 20);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(state.mouse.x, state.mouse.y, 2, 0, Math.PI * 2);
+            ctx.fillStyle = '#ff3333';
+            ctx.fill();
+        }
+    }
+
+    // ==================== MAIN LOOP ====================
+    function loop() {
+        if (!state.gameOver) {
+            if (state.phase === 1) phase1();
+            else if (state.phase === 2) phase2();
+            else if (state.phase === 3) phase3();
+        }
+        render();
+        requestAnimationFrame(loop);
+    }
+    loop();
+</script>
+{% endblock %}

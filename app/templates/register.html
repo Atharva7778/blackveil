@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}REGISTER{% endblock %}
+{% block content %}
+<div class="panel">
+    <h2>NEW AGENT ENROLLMENT</h2>
+    <form method="POST">
+        <label>Codename</label>
+        <input type="text" name="codename" required maxlength="50" autofocus>
+        <label>Password (min 6 chars)</label>
+        <input type="password" name="password" required minlength="6">
+        <button type="submit">ENROLL</button>
+    </form>
+    <p style="margin-top:1rem;font-size:0.85rem;color:#666;">
+        Already enrolled? <a href="{{ url_for('main.login') }}">Authenticate here</a>
+    </p>
+</div>
+{% endblock %}

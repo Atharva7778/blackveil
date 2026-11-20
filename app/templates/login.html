@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}LOGIN{% endblock %}
+{% block content %}
+<div class="panel">
+    <h2>AGENT AUTHENTICATION</h2>
+    <form method="POST">
+        <label>Codename</label>
+        <input type="text" name="codename" required autofocus>
+        <label>Password</label>
+        <input type="password" name="password" required>
+        <button type="submit">AUTHENTICATE</button>
+    </form>
+    <p style="margin-top:1rem;font-size:0.85rem;color:#666;">
+        No identity on file? <a href="{{ url_for('main.register') }}">Enroll here</a>
+    </p>
+</div>
+{% endblock %}

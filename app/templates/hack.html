@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}NETWORK BYPASS{% endblock %}
+{% block content %}
+
+<style>
+    .game-wrapper { display: flex; flex-direction: column; align-items: center; margin-top: 20px; }
+    .grid-container {
+        display: grid;
+        grid-template-columns: repeat(10, 45px);
+        grid-template-rows: repeat(10, 45px);
+        gap: 3px;
+        background: #0a0a0a;
+        padding: 10px;
+        border: 1px solid #00ff41;
+    }
+    .node { width: 45px; height: 45px; background: #111; border: 1px solid #333; cursor: pointer; transition: all 0.15s; }
+    .node:hover { background: #222; border-color: #00ff41; }
+    .node.start { background: #00ff41; }
+    .node.end { background: #ffaa00; }
+    .node.path { background: #004400; border-color: #00ff41; }
+    .node.firewall { background: #330000; border-color: #ff3333; cursor: not-allowed; }
+    .node.virus { background: #440044; border-color: #cc00cc; }
+    .status-box { margin-top: 20px; font-size: 1.2rem; color: #00ff41; text-align: center; min-height: 30px; }
+    .hud-row { display: flex; gap: 2rem; margin-bottom: 1rem; font-size: 1rem; }
+</style>
+
+<div class="panel" style="max-width: 650px; text-align: center; margin: 0 auto;">
+    <h2>NETWORK BYPASS // HARD MODE</h2>
+    <p style="color: #666; font-size: 0.9rem; margin-bottom: 1rem;">
+        Collect all <span style="color:#cc00cc">VIRUSES</span>, avoid <span style="color:#ff3333">FIREWALLS</span>, and reach the <span style="color:#ffaa00">DATA</span> node. 90 seconds.
+    </p>
+    
+    <div class="hud-row">
+        <span>TIME: <span id="timer" style="color:#ffaa00">90</span>s</span>
+        <span>VIRUSES: <span id="virusCount" style="color:#cc00cc">0/0</span></span>
+    </div>
+
+    <div class="game-wrapper">
+        <div class="grid-container" id="grid"></div>
+        <div class="status-box" id="status">SYSTEM READY. CLICK THE GREEN NODE.</div>
+    </div>
+
+    <p style="margin-top: 2rem; font-size: 0.85rem;">
+        <a href="{{ url_for('main.dashboard') }}">[ ABORT HACK ]</a>
+    </p>
+</div>
+
+<script>
+    const GRID_SIZE = 10;
+    const gridEl = document.getElementById('grid');
+    const statusEl = document.getElementById('status');
+    const timerEl = document.getElementById('timer');
+    const virusEl = document.getElementById('virusCount');
+    
+    let gameState = 'IDLE';
+    let currentPath = [];
+    let timeLeft = 90;
+    
+    let startNode = { r: Math.floor(Math.random() * 5), c: 0 };
+    let endNode = { r: 5 + Math.floor(Math.random() * 5), c: 9 };
+    
+    let firewalls = [];
+    let viruses = [];
+    
+    for (let i = 0; i < 15; i++) {
+        let r = Math.floor(Math.random() * GRID_SIZE);
+        let c = Math.floor(Math.random() * GRID_SIZE);
+        if ((r === startNode.r && c === startNode.c) || (r === endNode.r && c === endNode.c)) continue;
+        if (firewalls.some(f => f.r === r && f.c === c) || viruses.some(v => v.r === r && v.c === c)) continue;
+        firewalls.push({ r, c });
+    }
+    
+    for (let i = 0; i < 4; i++) {
+        let r = Math.floor(Math.random() * GRID_SIZE);
+        let c = Math.floor(Math.random() * GRID_SIZE);
+        if ((r === startNode.r && c === startNode.c) || (r === endNode.r && c === endNode.c)) continue;
+        if (firewalls.some(f => f.r === r && f.c === c) || viruses.some(v => v.r === r && v.c === c)) continue;
+        viruses.push({ r, c });
+    }
+
+    virusEl.innerText = `0/${viruses.length}`;
+
+    for (let r = 0; r < GRID_SIZE; r++) {
+        for (let c = 0; c < GRID_SIZE; c++) {
+            let node = document.createElement('div');
+            node.classList.add('node');
+            node.dataset.r = r;
+            node.dataset.c = c;
+            
+            if (r === startNode.r && c === startNode.c) node.classList.add('start');
+            else if (r === endNode.r && c === endNode.c) node.classList.add('end');
+            else if (firewalls.some(f => f.r === r && f.c === c)) node.classList.add('firewall');
+            else if (viruses.some(v => v.r === r && v.c === c)) node.classList.add('virus');
+            
+            node.addEventListener('click', () => handleNodeClick(r, c));
+            gridEl.appendChild(node);
+        }
+    }
+
+    function getNode(r, c) { return gridEl.children[r * GRID_SIZE + c]; }
+
+    setInterval(() => {
+        if (gameState === 'PLAYING') {
+            timeLeft--;
+            timerEl.innerText = timeLeft;
+            if (timeLeft <= 0) {
+                gameState = 'LOST';
+                statusEl.innerText = "TIME EXPIRED. TRACE DETECTED.";
+                statusEl.style.color = "#ff3333";
+            }
+        }
+    }, 1000);
+
+    function handleNodeClick(r, c) {
+        if (gameState === 'WON' || gameState === 'LOST') return;
+
+        let clickedNode = getNode(r, c);
+        if (clickedNode.classList.contains('firewall')) {
+            statusEl.innerText = "FIREWALL HIT. TRACE INITIATED.";
+            statusEl.style.color = "#ff3333";
+            return;
+        }
+
+        if (gameState === 'IDLE') {
+            if (r === startNode.r && c === startNode.c) {
+                gameState = 'PLAYING';
+                currentPath.push({ r, c });
+                statusEl.innerText = "ROUTE INITIATED.";
+                statusEl.style.color = "#00ff41";
+            } else {
+                statusEl.innerText = "START AT THE GREEN NODE.";
+            }
+            return;
+        }
+
+        if (gameState === 'PLAYING') {
+            let lastNode = currentPath[currentPath.length - 1];
+            let distance = Math.abs(lastNode.r - r) + Math.abs(lastNode.c - c);
+            if (distance !== 1) { statusEl.innerText = "ERROR: MUST CONNECT TO ADJACENT NODE."; return; }
+            if (currentPath.some(n => n.r === r && n.c === c)) { statusEl.innerText = "ERROR: ROUTE CANNOT CROSS ITSELF."; return; }
+            
+            currentPath.push({ r, c });
+            clickedNode.classList.add('path');
+
+            if (viruses.some(v => v.r === r && v.c === c)) {
+                let collected = currentPath.filter(p => viruses.some(v => v.r === p.r && v.c === p.c)).length;
+                virusEl.innerText = `${collected}/${viruses.length}`;
+            }
+
+            if (r === endNode.r && c === endNode.c) {
+                let collected = currentPath.filter(p => viruses.some(v => v.r === p.r && v.c === p.c)).length;
+                if (collected === viruses.length) {
+                    gameState = 'WON';
+                    statusEl.innerText = "BYPASS SUCCESSFUL. ACCESS GRANTED. +150 XP";
+                    statusEl.style.color = "#00ff41";
+                    
+                    // Save XP to Backend
+                    fetch('/api/award-xp', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ amount: 150 })
+                    });
+                    
+                    setTimeout(() => { window.location.href = "/dashboard"; }, 2000);
+                } else {
+                    statusEl.innerText = `ACCESS DENIED. ${viruses.length - collected} VIRUS(ES) REMAINING.`;
+                    statusEl.style.color = "#ff3333";
+                }
+            }
+        }
+    }
+</script>
+{% endblock %}

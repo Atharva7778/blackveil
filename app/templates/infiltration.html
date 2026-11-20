@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+{% block title %}INFILTRATION{% endblock %}
+{% block content %}
+
+<style>
+    #game-container { position: relative; width: 800px; height: 600px; border: 1px solid #00ff41; margin: 0 auto; background: #050505; overflow: hidden; }
+    canvas { display: block; }
+    #hud-overlay { position: absolute; top: 10px; left: 10px; right: 10px; display: flex; justify-content: space-between; color: #00ff41; pointer-events: none; font-size: 1rem; background: rgba(0,0,0,0.8); padding: 10px; border: 1px solid #333; }
+    #detection-bar { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); width: 300px; height: 15px; border: 1px solid #ff3333; background: #111; display: none; }
+    #detection-fill { height: 100%; width: 0%; background: #ff3333; transition: width 0.05s; }
+</style>
+
+<div class="panel" style="max-width: 850px;">
+    <h2>TACTICAL INFILTRATION // BALANCED MODE</h2>
+    <p style="color: #666; font-size: 0.9rem;">
+        Reach the terminal. Hold SHIFT to crouch (slower, but guards spot you 2x slower). Lasers are still instant death!
+    </p>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        <div id="hud-overlay">
+            <span>TIME: <span id="timeText">60</span>s</span>
+            <span>DETECTION: <span id="detectText">0</span>%</span>
+            <span>STATUS: <span id="statusText">INFILTRATING</span></span>
+        </div>
+        <div id="detection-bar"><div id="detection-fill"></div></div>
+    </div>
+
+    <p style="margin-top: 1.5rem; font-size: 0.85rem; text-align: center;">
+        <a href="{{ url_for('main.dashboard') }}">[ ABORT MISSION ]</a>
+    </p>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const statusText = document.getElementById('statusText');
+    const timeText = document.getElementById('timeText');
+    const detectText = document.getElementById('detectText');
+    const detectionBar = document.getElementById('detection-bar');
+    const detectionFill = document.getElementById('detection-fill');
+
+    let gameState = 'PLAYING';
+    let keys = {};
+    let timeLeft = 60;
+    let detection = 0;
+    let xpAwarded = false;
+
+    let player = { x: 50, y: 500, width: 15, height: 15, speed: 4 };
+    let terminal = { x: 740, y: 280, width: 30, height: 40 };
+
+    // Fair lasers with gaps
+    let lasers = [
+        { x1: 250, y1: 0, x2: 250, y2: 450 },
+        { x1: 500, y1: 150, x2: 500, y2: 600 }
+    ];
+
+    // Fair guards
+    let guards = [
+        { x: 350, y: 500, dx: 1.5, dy: 0, range: 130, angle: 0, fov: 90, patrol: 80, startX: 350 },
+        { x: 650, y: 150, dx: -1.5, dy: 0, range: 130, angle: Math.PI, fov: 90, patrol: 80, startX: 650 }
+    ];
+
+    window.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
+    window.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+
+    function isInVisionCone(guard, target) {
+        let dx = target.x + target.width/2 - guard.x;
+        let dy = target.y + target.height/2 - guard.y;
+        let distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance > guard.range) return false;
+        
+        let targetAngle = Math.atan2(dy, dx);
+        let angleDiff = targetAngle - guard.angle;
+        while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+        while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+        
+        let fovRadians = (guard.fov * Math.PI) / 180 / 2;
+        return Math.abs(angleDiff) < fovRadians;
+    }
+
+    function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const lengthSq = dx * dx + dy * dy;
+        if (lengthSq === 0) return Math.hypot(px - x1, py - y1);
+        let t = ((px - x1) * dx + (py - y1) * dy) / lengthSq;
+        t = Math.max(0, Math.min(1, t));
+        const closestX = x1 + t * dx;
+        const closestY = y1 + t * dy;
+        return Math.hypot(px - closestX, py - closestY);
+    }
+
+    function checkLaserCollision(px, py, pw, ph) {
+        const points = [
+            { x: px, y: py },
+            { x: px + pw, y: py },
+            { x: px, y: py + ph },
+            { x: px + pw, y: py + ph }
+        ];
+        for (let l of lasers) {
+            for (let p of points) {
+                const dist = pointToSegmentDistance(p.x, p.y, l.x1, l.y1, l.x2, l.y2);
+                if (dist < 4) return true;
+            }
+        }
+        return false;
+    }
+
+    setInterval(() => {
+        if (gameState === 'PLAYING') {
+            timeLeft--;
+            timeText.innerText = timeLeft;
+            if (timeLeft <= 0) {
+                gameState = 'LOST';
+                statusText.innerText = "TIME EXPIRED.";
+                statusText.style.color = "#ff3333";
+            }
+        }
+    }, 1000);
+
+    function update() {
+        if (gameState !== 'PLAYING') return;
+
+        let speed = keys['shift'] ? 2 : 4;
+
+        if (keys['w']) player.y -= speed;
+        if (keys['s']) player.y += speed;
+        if (keys['a']) player.x -= speed;
+        if (keys['d']) player.x += speed;
+
+        if (player.x < 0) player.x = 0;
+        if (player.x > canvas.width - player.width) player.x = canvas.width - player.width;
+        if (player.y < 0) player.y = 0;
+        if (player.y > canvas.height - player.height) player.y = canvas.height - player.height;
+
+        // Laser Death (Instant)
+        if (checkLaserCollision(player.x, player.y, player.width, player.height)) {
+            gameState = 'LOST';
+            statusText.innerText = "LASER TRIGGERED. AGENT DOWN.";
+            statusText.style.color = "#ff3333";
+            return;
+        }
+
+        // Win
+        if (player.x < terminal.x + terminal.width && player.x + player.width > terminal.x &&
+            player.y < terminal.y + terminal.height && player.y + player.height > terminal.y) {
+            
+            gameState = 'WON';
+            statusText.innerText = "MISSION ACCOMPLISHED. +100 XP";
+            statusText.style.color = "#00ff41";
+
+            if (!xpAwarded) {
+                xpAwarded = true;
+                fetch('/api/award-xp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ amount: 100 })
+                });
+            }
+            return;
+        }
+
+        // Guards & Detection
+        let seen = false;
+        guards.forEach(guard => {
+            if (guard.dx !== 0) {
+                guard.x += guard.dx;
+                guard.angle = guard.dx > 0 ? 0 : Math.PI;
+                if (Math.abs(guard.x - guard.startX) > guard.patrol) guard.dx *= -1;
+            }
+            if (guard.dy !== 0) {
+                guard.y += guard.dy;
+                guard.angle = guard.dy > 0 ? Math.PI/2 : -Math.PI/2;
+                if (Math.abs(guard.y - guard.startY) > guard.patrol) guard.dy *= -1;
+            }
+            if (isInVisionCone(guard, player)) seen = true;
+        });
+
+        if (seen) {
+            detectionBar.style.display = 'block';
+            // Standing: +3.5/frame (≈1.5s to caught)
+            // Crouching: +1.75/frame (≈3s to caught)
+            detection += keys['shift'] ? 1.75 : 3.5;
+            if (detection > 100) detection = 100;
+            detectionFill.style.width = detection + '%';
+            detectText.innerText = Math.floor(detection);
+            
+            if (detection >= 100) {
+                gameState = 'LOST';
+                statusText.innerText = "AGENT COMPROMISED.";
+                statusText.style.color = "#ff3333";
+            }
+        } else {
+            detection -= 3; // Drain fast
+            if (detection < 0) detection = 0;
+            detectionFill.style.width = detection + '%';
+            detectText.innerText = Math.floor(detection);
+            if (detection === 0) detectionBar.style.display = 'none';
+        }
+    }
+
+    function draw() {
+        ctx.fillStyle = '#050505';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Grid
+        ctx.strokeStyle = '#111';
+        for (let i = 0; i < canvas.width; i += 40) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, canvas.height); ctx.stroke(); }
+        for (let i = 0; i < canvas.height; i += 40) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(canvas.width, i); ctx.stroke(); }
+
+        // Lasers
+        lasers.forEach(l => {
+            ctx.strokeStyle = 'rgba(255, 0, 0, 0.3)';
+            ctx.lineWidth = 10;
+            ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(l.x2, l.y2); ctx.stroke();
+            ctx.strokeStyle = '#ff0000';
+            ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.moveTo(l.x1, l.y1); ctx.lineTo(l.x2, l.y2); ctx.stroke();
+        });
+        ctx.lineWidth = 1;
+
+        // Terminal
+        ctx.fillStyle = '#ffaa00';
+        ctx.fillRect(terminal.x, terminal.y, terminal.width, terminal.height);
+        ctx.fillStyle = '#000';
+        ctx.font = 'bold 10px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('DATA', terminal.x + terminal.width/2, terminal.y + terminal.height/2 + 3);
+
+        // Guards
+        guards.forEach(guard => {
+            let fovRadians = (guard.fov * Math.PI) / 180 / 2;
+            ctx.beginPath();
+            ctx.moveTo(guard.x, guard.y);
+            ctx.arc(guard.x, guard.y, guard.range, guard.angle - fovRadians, guard.angle + fovRadians);
+            ctx.fillStyle = 'rgba(255, 0, 0, 0.15)';
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(255, 0, 0, 0.4)';
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.arc(guard.x, guard.y, 10, 0, Math.PI * 2);
+            ctx.fillStyle = '#ff3333';
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.stroke();
+
+            let eyeX = guard.x + Math.cos(guard.angle) * 5;
+            let eyeY = guard.y + Math.sin(guard.angle) * 5;
+            ctx.beginPath();
+            ctx.arc(eyeX, eyeY, 3, 0, Math.PI * 2);
+            ctx.fillStyle = '#fff';
+            ctx.fill();
+        });
+
+        // Player
+        ctx.fillStyle = keys['shift'] ? '#008800' : '#00ff41';
+        ctx.fillRect(player.x, player.y, player.width, player.height);
+
+        // Overlays
+        if (gameState === 'LOST') {
+            ctx.fillStyle = 'rgba(255, 0, 0, 0.4)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#ff3333';
+            ctx.font = 'bold 36px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('MISSION FAILED', canvas.width/2, canvas.height/2 - 20);
+        }
+        if (gameState === 'WON') {
+            ctx.fillStyle = 'rgba(0, 255, 65, 0.2)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#00ff41';
+            ctx.font = 'bold 36px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('MISSION ACCOMPLISHED', canvas.width/2, canvas.height/2 - 20);
+        }
+    }
+
+    function loop() { update(); draw(); requestAnimationFrame(loop); }
+    loop();
+</script>
+{% endblock %}

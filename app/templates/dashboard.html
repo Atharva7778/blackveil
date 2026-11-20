@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}DASHBOARD{% endblock %}
+{% block content %}
+
+<style>
+    .mission-btn {
+        width: 100%; margin-bottom: 10px; padding: 0.85rem 1rem;
+        font-family: inherit; font-weight: bold; letter-spacing: 1.5px;
+        border: none; cursor: pointer; font-size: 0.95rem;
+        transition: filter 0.15s;
+    }
+    .mission-btn:hover { filter: brightness(1.15); }
+    
+    .btn-yellow { background: #ffaa00; color: #000; }
+    .btn-green  { background: #00ff41; color: #000; }
+    .btn-grey   { background: #666; color: #000; }
+    .btn-orange { background: #ff6600; color: #000; }
+</style>
+
+<div class="panel">
+    <h2>AGENT DOSSIER</h2>
+    <div class="stat"><span>Codename</span><span>{{ agent.codename }}</span></div>
+    <div class="stat"><span>Rank</span><span class="rank">{{ agent.rank }}</span></div>
+    <div class="stat"><span>XP</span><span>{{ agent.xp }}</span></div>
+</div>
+
+<div class="panel">
+    <h2>DAILY BRIEFING</h2>
+    <p style="color:#666; font-size:0.9rem; margin-bottom:1rem;">
+        Multiple threats detected. Choose your mission.
+    </p>
+
+    <a href="{{ url_for('main.infiltration') }}"><button class="mission-btn btn-yellow">INFILTRATE FACILITY (STEALTH)</button></a>
+    <a href="{{ url_for('main.hack') }}"><button class="mission-btn btn-green">INITIATE NETWORK HACK (LOGIC)</button></a>
+    <a href="{{ url_for('main.codebreaker') }}"><button class="mission-btn btn-grey">CODEBREAKER (CIPHER)</button></a>
+    <a href="{{ url_for('main.extraction') }}"><button class="mission-btn btn-orange">EXTRACTION PROTOCOL (SURVIVAL)</button></a>
+</div>
+
+<p style="font-size:0.85rem;">
+    <a href="{{ url_for('main.logout') }}">[ TERMINATE SESSION ]</a>
+</p>
+{% endblock %}
